@@ -214,6 +214,14 @@ const nextConfig: NextConfig = {
 export default nextConfig
 ```
 
+<Image
+  alt="Navigation Inspector panel shown in three states: idle with a Start Capturing button, awaiting a navigation while capturing, and the prefetched UI frozen for the last navigation"
+  srcLight="/docs/light/inspector-states.png"
+  srcDark="/docs/dark/inspector-states.png"
+  width="3258"
+  height="1502"
+/>
+
 Open the Next.js DevTools and select **Navigation Inspector**, then click **Start Capturing**. While capturing is active:
 
 - Refresh the page to freeze the initial static UI generated for the route, before any dynamic data streams in.
@@ -325,7 +333,13 @@ You can see this with the DevTools. Try a **page load**: the root `<Suspense>` c
 
 Cache Components simulates navigations at every shared layout boundary in this route. The page awaits `params` and accesses uncached data at the top level, with no `<Suspense>` boundary around any of it. The first thing validation catches is the `await params` at the top level.
 
-{/* TODO: screenshot — Next.js dev overlay surfacing the blocking-route insight on the broken /shop/[slug] route, with the await params at the top level highlighted */}
+<Image
+  alt="Next.js dev overlay surfacing an Insights entry titled 'Next.js encountered runtime data during a navigation' for app/shop/[slug]/page.tsx, with the await cookies() call highlighted and three suggested fixes: Stream, Cache, and Block"
+  srcLight="/docs/light/instant-runtime-data-insight.png"
+  srcDark="/docs/dark/instant-runtime-data-insight.png"
+  width="2580"
+  height="1864"
+/>
 
 ### Step 2: Fix the validation error
 
