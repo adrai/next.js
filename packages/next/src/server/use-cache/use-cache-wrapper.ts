@@ -3279,10 +3279,13 @@ function getStageDelayIfRootParamsUsed(
       }
       case 'request': {
         // For a staged dynamic request, assume we're recovering a static shell --
-        // If a session shell is needed, we do it in a separate render
-        return stagedRendering.waitForStage(
-          getStaticLinkDataStage(stagedRendering)
-        )
+        // If a session shell is needed, we do it in a separate render.
+        // However, a dev request might want to recover a session shell instead.
+        // (indicated by `needsSessionShell`)
+        const stage = workUnitStore.needsSessionShell
+          ? getRuntimeLinkDataStage(stagedRendering)
+          : getStaticLinkDataStage(stagedRendering)
+        return stagedRendering.waitForStage(stage)
       }
       case 'unstable-cache':
       case 'cache':

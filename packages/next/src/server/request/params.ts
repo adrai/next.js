@@ -570,14 +570,17 @@ function createStagedRenderParamsImpl(
   )
 
   // If we're rendering with shells, even static params must be delayed to exclude them from the shell.
-  // For a dynamic request we generally want a static shell (session shells come from a separate render).
+  // For a dynamic request we generally want a static shell (session shells come from a separate render),
+  // Except for dev where we might need to recover a session shell for validation (indicated by `needsSessionShell`).
   if (
     process.env.__NEXT_APP_SHELLS &&
     // Params are non-empty, and there's no fallback params, so all params are static
     !isEmptyParams(underlyingParams) &&
     !hasFallbackParams
   ) {
-    const staticParamsStages = RENDER_STAGES_BY_DATA_KIND.staticLinkData
+    const staticParamsStages = workUnitStore.needsSessionShell
+      ? RENDER_STAGES_BY_DATA_KIND.runtimeLinkData
+      : RENDER_STAGES_BY_DATA_KIND.staticLinkData
     const stage = isRuntimePrefetchable
       ? staticParamsStages.early
       : staticParamsStages.late
