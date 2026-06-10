@@ -27,6 +27,8 @@ import type {
   ValidationStoreClient,
 } from '../app-render/work-unit-async-storage.external'
 import type { NextParsedUrlQuery } from '../request-meta'
+import { getTurbopackChunkGroupBootstrap } from '../get-page-files'
+import { UNDERSCORE_NOT_FOUND_ROUTE_ENTRY } from '../../shared/lib/entry-constants'
 import type { LoaderTree } from '../lib/app-dir-module'
 import type { AppPageModule } from '../route-modules/app-page/module'
 import type { BaseNextRequest, BaseNextResponse } from '../base-http'
@@ -3236,9 +3238,14 @@ async function renderToStream(
   // bootstrap script is executed, which depends on it during hydration.
   // For MPA navigations (page reload, direct URL entry), the request ID
   // header is not present, so we generate a random one.
+  //
+  // In production (with Turbopack), the per-route chunk group bootstrap is inlined
+  // here (instead of shipping a per-route evaluate chunk) so it executes — before
+  // the external runtime bootstrap script — to seed the `globalThis[TURBOPACK]`
+  // queue that the shared runtime drains.
   const bootstrapScriptContent = process.env.__NEXT_DEV_SERVER
     ? `self.__next_r=${JSON.stringify(requestId ?? crypto.randomUUID())}`
-    : undefined
+    : getTurbopackChunkGroupBootstrap(buildManifest, [page])
 
   // Create the "render route (app)" span manually so we can keep it open during streaming.
   // This is necessary because errors inside Suspense boundaries are reported asynchronously
@@ -4033,8 +4040,16 @@ async function renderToStream(
         subresourceIntegrityManifest,
         getAssetQueryString(ctx, false),
         nonce,
-        '/_not-found/page'
+        UNDERSCORE_NOT_FOUND_ROUTE_ENTRY
       )
+
+      // The error/not-found render ships the not-found page's chunks, so its inline
+      // bootstrap must be keyed to that page, not the requested one.
+      const errorBootstrapScriptContent = process.env.__NEXT_DEV_SERVER
+        ? bootstrapScriptContent
+        : getTurbopackChunkGroupBootstrap(buildManifest, [
+            UNDERSCORE_NOT_FOUND_ROUTE_ENTRY,
+          ])
 
       if (process.env.__NEXT_USE_NODE_STREAMS) {
         // MARK: nodeStreams errorRecovery RSC + HTML
@@ -4091,7 +4106,7 @@ async function renderToStream(
               />,
               {
                 nonce,
-                bootstrapScriptContent,
+                bootstrapScriptContent: errorBootstrapScriptContent,
                 bootstrapScripts: [errorBootstrapScript],
                 formState,
               },
@@ -4190,7 +4205,7 @@ async function renderToStream(
               />,
               {
                 nonce,
-                bootstrapScriptContent,
+                bootstrapScriptContent: errorBootstrapScriptContent,
                 bootstrapScripts: [errorBootstrapScript],
                 formState,
               }
@@ -6736,6 +6751,14 @@ async function prerenderToStream(
     page
   )
 
+  // Inline the per-route Turbopack chunk group bootstrap (production only) so that
+  // statically-prerendered app pages seed `globalThis[TURBOPACK]` before the runtime
+  // chunk runs — mirrors renderToStream. Empty in dev.
+  const bootstrapScriptContent = getTurbopackChunkGroupBootstrap(
+    buildManifest,
+    [page]
+  )
+
   const { reactServerErrorsByDigest } = workStore
   // We don't report errors during prerendering through our instrumentation hooks
   const reportErrors = !experimental.isRoutePPREnabled
@@ -7087,6 +7110,7 @@ async function prerenderToStream(
                 )
               }
             },
+            bootstrapScriptContent,
             bootstrapScripts: [bootstrapScript],
           }
         )
@@ -7504,6 +7528,7 @@ async function prerenderToStream(
                 },
                 onHeaders: finalClientOnHeaders,
                 maxHeadersLength: reactMaxHeadersLength,
+                bootstrapScriptContent,
                 bootstrapScripts: [bootstrapScript],
               }
             )
@@ -7724,6 +7749,7 @@ async function prerenderToStream(
             onError: htmlRendererErrorHandler,
             onHeaders: pprOnHeaders,
             maxHeadersLength: reactMaxHeadersLength,
+            bootstrapScriptContent,
             bootstrapScripts: [bootstrapScript],
           }
         )
@@ -7946,6 +7972,7 @@ async function prerenderToStream(
         {
           onError: htmlRendererErrorHandler,
           nonce,
+          bootstrapScriptContent,
           bootstrapScripts: [bootstrapScript],
         },
         { waitForAllReady: true }
@@ -8062,7 +8089,14 @@ async function prerenderToStream(
       subresourceIntegrityManifest,
       getAssetQueryString(ctx, false),
       nonce,
-      '/_not-found/page'
+      UNDERSCORE_NOT_FOUND_ROUTE_ENTRY
+    )
+
+    // The error/not-found render ships the not-found page's chunks, so its inline
+    // bootstrap must be keyed to that page, not the requested one.
+    const errorBootstrapScriptContent = getTurbopackChunkGroupBootstrap(
+      buildManifest,
+      [UNDERSCORE_NOT_FOUND_ROUTE_ENTRY]
     )
 
     if (cacheComponents) {
@@ -8235,6 +8269,7 @@ async function prerenderToStream(
               />,
               {
                 nonce,
+                bootstrapScriptContent: errorBootstrapScriptContent,
                 bootstrapScripts: [errorBootstrapScript],
                 formState,
                 signal: errorClientReactController.signal,
@@ -8474,6 +8509,7 @@ async function prerenderToStream(
         />,
         {
           nonce,
+          bootstrapScriptContent: errorBootstrapScriptContent,
           bootstrapScripts: [errorBootstrapScript],
           formState,
         },
