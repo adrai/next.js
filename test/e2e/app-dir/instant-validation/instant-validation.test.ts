@@ -18,12 +18,16 @@ import {
 } from '../../../lib/add-redbox-matchers'
 import { getDeterministicOutput } from '../cache-components-errors/utils'
 
+// Set in `instant-validation-app-shells.test.ts`
+const appShellsEnabled = !!process.env.NEXT_TEST_ENABLE_APP_SHELLS
+
 describe('instant validation', () => {
   const { next, skipped, isNextDev, isNextStart, isTurbopack } = nextTestSetup({
     files: __dirname,
     skipStart: true,
     skipDeployment: true,
     env: {
+      NEXT_TEST_ENABLE_APP_SHELLS: appShellsEnabled ? '1' : '',
       NEXT_TEST_LOG_VALIDATION: '1',
     },
   })
@@ -83,12 +87,19 @@ describe('instant validation', () => {
     await waitForNoErrorToast(browser, NO_VALIDATION_ERRORS_WAIT)
   }
 
+  const descriptionPrefix = appShellsEnabled ? 'with appShells - ' : ''
   const cases = isNextDev
     ? [
-        { isClientNav: false, description: 'dev - initial load' },
-        { isClientNav: true, description: 'dev - client navigation' },
+        {
+          isClientNav: false,
+          description: descriptionPrefix + 'dev - initial load',
+        },
+        {
+          isClientNav: true,
+          description: descriptionPrefix + 'dev - client navigation',
+        },
       ]
-    : [{ isClientNav: false, description: 'build' }]
+    : [{ isClientNav: false, description: descriptionPrefix + 'build' }]
 
   describe.each(cases)('$description', ({ isClientNav }) => {
     /**
@@ -103,14 +114,24 @@ describe('instant validation', () => {
         return browser
       }
 
-      // Soft nav - go to index page first, then click link
+      // Soft nav - go to index page first, then click link.
+      // App-shell routes have their own index page (and their own root
+      // layouts), so they're reached from `/shells` rather than a section
+      // index that shares a single root layout.
+      const isShell = href.startsWith('/shells/')
       const indexPage = href.startsWith('/default/')
         ? '/default'
-        : '/suspense-in-root'
+        : isShell
+          ? '/shells'
+          : '/suspense-in-root'
       const browser = await next.browser(indexPage)
-      const initialRootLayoutTimestamp = await browser
-        .elementById('root-layout-timestamp')
-        .text()
+
+      // The root-layout-timestamp invariant only applies to within-section
+      // soft navigations. App-shell routes each have their own root layout
+      // (which has no timestamp), so skip that sanity check for them.
+      const initialRootLayoutTimestamp = isShell
+        ? null
+        : await browser.elementById('root-layout-timestamp').text()
 
       await browser
         .elementByCss(`[data-link-type="soft"][href="${href}"]`)
@@ -125,11 +146,13 @@ describe('instant validation', () => {
         'wait for url to change'
       )
 
-      // Sanity check: we shouldn't have switched or otherwise refetched the root layout
-      const finalRootLayoutTimestamp = await browser
-        .elementById('root-layout-timestamp')
-        .text()
-      expect(initialRootLayoutTimestamp).toBe(finalRootLayoutTimestamp)
+      if (!isShell) {
+        // Sanity check: we shouldn't have switched or otherwise refetched the root layout
+        const finalRootLayoutTimestamp = await browser
+          .elementById('root-layout-timestamp')
+          .text()
+        expect(initialRootLayoutTimestamp).toBe(finalRootLayoutTimestamp)
+      }
       return browser
     }
 
@@ -3632,5 +3655,363 @@ describe('instant validation', () => {
         }
       })
     })
+
+    if (appShellsEnabled) {
+      describe('app shell validation', () => {
+        it('valid - session data is allowed in a shell', async () => {
+          if (isNextDev) {
+            const browser = await navigateTo('/shells/valid-session-only')
+            await expectNoDevValidationErrors(browser, await browser.url())
+          } else {
+            const result = await prerender(
+              '/shells/(default)/valid-session-only'
+            )
+            expectNoBuildValidationErrors(result)
+          }
+        })
+
+        it('valid - session data is allowed in a shell (with dynamic data)', async () => {
+          if (isNextDev) {
+            const browser = await navigateTo(
+              '/shells/valid-session-with-dynamic'
+            )
+            await expectNoDevValidationErrors(browser, await browser.url())
+          } else {
+            const result = await prerender(
+              '/shells/(default)/valid-session-with-dynamic'
+            )
+            expectNoBuildValidationErrors(result)
+          }
+        })
+
+        it('valid - static params guarded by suspense in a shell', async () => {
+          if (isNextDev) {
+            const browser = await navigateTo(
+              '/shells/valid-static-with-gsp/123'
+            )
+            await expectNoDevValidationErrors(browser, await browser.url())
+          } else {
+            const result = await prerender(
+              '/shells/(default)/valid-static-with-gsp/[slug]'
+            )
+            expectNoBuildValidationErrors(result)
+          }
+        })
+
+        it('invalid - unguarded params in a runtime-prefetchable shell', async () => {
+          if (isNextDev) {
+            const browser = await navigateTo(
+              '/shells/invalid-runtime-params/123'
+            )
+            await expect(browser).toDisplayCollapsedRedbox(`
+             {
+               "cause": [
+                 {
+                   "label": "Caused by: Instant Validation",
+                   "source": "app/shells/(default)/invalid-runtime-params/[slug]/page.tsx (3:33) @ instant
+             > 3 | export const instant: Instant = {
+                 |                                 ^",
+                   "stack": [
+                     "instant app/shells/(default)/invalid-runtime-params/[slug]/page.tsx (3:33)",
+                     "Set.forEach <anonymous>",
+                   ],
+                 },
+               ],
+               "code": "E1363",
+               "description": "Next.js encountered link data during a navigation.",
+               "environmentLabel": "Server",
+               "label": "Instant",
+               "source": "app/shells/(default)/invalid-runtime-params/[slug]/page.tsx (28:3) @ LinkData
+             > 28 |   await params
+                  |   ^",
+               "stack": [
+                 "LinkData app/shells/(default)/invalid-runtime-params/[slug]/page.tsx (28:3)",
+                 "Page app/shells/(default)/invalid-runtime-params/[slug]/page.tsx (22:7)",
+               ],
+             }
+            `)
+          } else {
+            const result = await prerender(
+              '/shells/(default)/invalid-runtime-params/[slug]'
+            )
+            expect(extractBuildValidationError(result.cliOutput))
+              .toMatchInlineSnapshot(`
+           "Error: Route "/shells/invalid-runtime-params/[slug]": Next.js encountered link data during prerendering or a navigation.
+
+           \`params\`, \`searchParams\` or root params accessed outside of \`<Suspense>\` prevents the navigation from being instant, leading to a slower user experience.
+
+           Ways to fix this:
+             - [stream] Provide a placeholder with \`<Suspense fallback={...}>\` around the data access
+               https://nextjs.org/docs/messages/blocking-prerender-runtime#wrap-in-or-move-into-suspense
+             - [block] Set \`export const instant = false\` to silence this warning and allow a blocking route
+               https://nextjs.org/docs/messages/blocking-prerender-runtime#allow-blocking-route
+               at main (<anonymous>)
+               at body (<anonymous>)
+               at html (<anonymous>)
+           Build-time instant validation failed for route "/shells/invalid-runtime-params/[slug]".
+           To get a more detailed stack trace and pinpoint the issue, try one of the following:
+             - Start the app in development mode by running \`next dev\`, then open "/shells/invalid-runtime-params/[slug]" in your browser to investigate the error.
+             - Rerun the production build with \`next build --debug-prerender\` to generate better stack traces.
+           Stopping prerender due to instant validation errors."
+          `)
+            expect(result.exitCode).toBe(1)
+          }
+        })
+
+        it('invalid - unguarded search params in a runtime-prefetchable shell', async () => {
+          if (isNextDev) {
+            const browser = await navigateTo(
+              '/shells/invalid-runtime-searchparams?foo=bar'
+            )
+            await expect(browser).toDisplayCollapsedRedbox(`
+             {
+               "cause": [
+                 {
+                   "label": "Caused by: Instant Validation",
+                   "source": "app/shells/(default)/invalid-runtime-searchparams/page.tsx (3:33) @ instant
+             > 3 | export const instant: Instant = {
+                 |                                 ^",
+                   "stack": [
+                     "instant app/shells/(default)/invalid-runtime-searchparams/page.tsx (3:33)",
+                     "Set.forEach <anonymous>",
+                   ],
+                 },
+               ],
+               "code": "E1363",
+               "description": "Next.js encountered link data during a navigation.",
+               "environmentLabel": "Server",
+               "label": "Instant",
+               "source": "app/shells/(default)/invalid-runtime-searchparams/page.tsx (27:3) @ LinkData
+             > 27 |   await searchParams
+                  |   ^",
+               "stack": [
+                 "LinkData app/shells/(default)/invalid-runtime-searchparams/page.tsx (27:3)",
+                 "Page app/shells/(default)/invalid-runtime-searchparams/page.tsx (17:7)",
+               ],
+             }
+            `)
+          } else {
+            const result = await prerender(
+              '/shells/(default)/invalid-runtime-searchparams'
+            )
+            expect(extractBuildValidationError(result.cliOutput))
+              .toMatchInlineSnapshot(`
+           "Error: Route "/shells/invalid-runtime-searchparams": Next.js encountered link data during prerendering or a navigation.
+
+           \`params\`, \`searchParams\` or root params accessed outside of \`<Suspense>\` prevents the navigation from being instant, leading to a slower user experience.
+
+           Ways to fix this:
+             - [stream] Provide a placeholder with \`<Suspense fallback={...}>\` around the data access
+               https://nextjs.org/docs/messages/blocking-prerender-runtime#wrap-in-or-move-into-suspense
+             - [block] Set \`export const instant = false\` to silence this warning and allow a blocking route
+               https://nextjs.org/docs/messages/blocking-prerender-runtime#allow-blocking-route
+               at main (<anonymous>)
+               at body (<anonymous>)
+               at html (<anonymous>)
+           Build-time instant validation failed for route "/shells/invalid-runtime-searchparams".
+           To get a more detailed stack trace and pinpoint the issue, try one of the following:
+             - Start the app in development mode by running \`next dev\`, then open "/shells/invalid-runtime-searchparams" in your browser to investigate the error.
+             - Rerun the production build with \`next build --debug-prerender\` to generate better stack traces.
+           Stopping prerender due to instant validation errors."
+          `)
+            expect(result.exitCode).toBe(1)
+          }
+        })
+
+        it('invalid - unguarded static params in a shell', async () => {
+          if (isNextDev) {
+            const browser = await navigateTo(
+              '/shells/invalid-static-with-gsp/123'
+            )
+            await expect(browser).toDisplayCollapsedRedbox(`
+             {
+               "cause": [
+                 {
+                   "label": "Caused by: Instant Validation",
+                   "source": "app/shells/(default)/invalid-static-with-gsp/[slug]/page.tsx (3:33) @ instant
+             > 3 | export const instant: Instant = {
+                 |                                 ^",
+                   "stack": [
+                     "instant app/shells/(default)/invalid-static-with-gsp/[slug]/page.tsx (3:33)",
+                     "Set.forEach <anonymous>",
+                   ],
+                 },
+               ],
+               "code": "E1363",
+               "description": "Next.js encountered link data during a navigation.",
+               "environmentLabel": "Server",
+               "label": "Instant",
+               "source": "app/shells/(default)/invalid-static-with-gsp/[slug]/page.tsx (29:20) @ LinkData
+             > 29 |   const { slug } = await params
+                  |                    ^",
+               "stack": [
+                 "LinkData app/shells/(default)/invalid-static-with-gsp/[slug]/page.tsx (29:20)",
+                 "Page app/shells/(default)/invalid-static-with-gsp/[slug]/page.tsx (23:7)",
+               ],
+             }
+            `)
+          } else {
+            const result = await prerender(
+              '/shells/(default)/invalid-static-with-gsp/[slug]'
+            )
+            expect(extractBuildValidationError(result.cliOutput))
+              .toMatchInlineSnapshot(`
+           "Error: Route "/shells/invalid-static-with-gsp/[slug]": Next.js encountered link data during prerendering or a navigation.
+
+           \`params\`, \`searchParams\` or root params accessed outside of \`<Suspense>\` prevents the navigation from being instant, leading to a slower user experience.
+
+           Ways to fix this:
+             - [stream] Provide a placeholder with \`<Suspense fallback={...}>\` around the data access
+               https://nextjs.org/docs/messages/blocking-prerender-runtime#wrap-in-or-move-into-suspense
+             - [block] Set \`export const instant = false\` to silence this warning and allow a blocking route
+               https://nextjs.org/docs/messages/blocking-prerender-runtime#allow-blocking-route
+               at main (<anonymous>)
+               at body (<anonymous>)
+               at html (<anonymous>)
+           Build-time instant validation failed for route "/shells/invalid-static-with-gsp/[slug]".
+           To get a more detailed stack trace and pinpoint the issue, try one of the following:
+             - Start the app in development mode by running \`next dev\`, then open "/shells/invalid-static-with-gsp/[slug]" in your browser to investigate the error.
+             - Rerun the production build with \`next build --debug-prerender\` to generate better stack traces.
+           Stopping prerender due to instant validation errors."
+          `)
+            expect(result.exitCode).toBe(1)
+          }
+        })
+
+        it('valid - root param guarded by suspense in a shell', async () => {
+          if (isNextDev) {
+            const browser = await navigateTo(
+              '/shells/with-root-param/en/valid-root-param'
+            )
+            await expectNoDevValidationErrors(browser, await browser.url())
+          } else {
+            const result = await prerender(
+              '/shells/with-root-param/[lang]/valid-root-param'
+            )
+            expectNoBuildValidationErrors(result)
+          }
+        })
+
+        it('invalid - unguarded root param in a page', async () => {
+          if (isNextDev) {
+            const browser = await navigateTo(
+              '/shells/with-root-param/en/invalid-root-param-page'
+            )
+            await expect(browser).toDisplayCollapsedRedbox(`
+             {
+               "cause": [
+                 {
+                   "label": "Caused by: Instant Validation",
+                   "source": "app/shells/with-root-param/[lang]/invalid-root-param-page/page.tsx (3:24) @ instant
+             > 3 | export const instant = { level: 'experimental-error' }
+                 |                        ^",
+                   "stack": [
+                     "instant app/shells/with-root-param/[lang]/invalid-root-param-page/page.tsx (3:24)",
+                     "Set.forEach <anonymous>",
+                   ],
+                 },
+               ],
+               "code": "E1363",
+               "description": "Next.js encountered link data during a navigation.",
+               "environmentLabel": "Server",
+               "label": "Instant",
+               "source": "app/shells/with-root-param/[lang]/invalid-root-param-page/page.tsx (18:33) @ LinkData
+             > 18 |   const currentLang = await lang()
+                  |                                 ^",
+               "stack": [
+                 "LinkData app/shells/with-root-param/[lang]/invalid-root-param-page/page.tsx (18:33)",
+                 "Page app/shells/with-root-param/[lang]/invalid-root-param-page/page.tsx (12:7)",
+               ],
+             }
+            `)
+          } else {
+            const result = await prerender(
+              '/shells/with-root-param/[lang]/invalid-root-param-page'
+            )
+            expect(extractBuildValidationError(result.cliOutput))
+              .toMatchInlineSnapshot(`
+           "Error: Route "/shells/with-root-param/[lang]/invalid-root-param-page": Next.js encountered link data during prerendering or a navigation.
+
+           \`params\`, \`searchParams\` or root params accessed outside of \`<Suspense>\` prevents the navigation from being instant, leading to a slower user experience.
+
+           Ways to fix this:
+             - [stream] Provide a placeholder with \`<Suspense fallback={...}>\` around the data access
+               https://nextjs.org/docs/messages/blocking-prerender-runtime#wrap-in-or-move-into-suspense
+             - [block] Set \`export const instant = false\` to silence this warning and allow a blocking route
+               https://nextjs.org/docs/messages/blocking-prerender-runtime#allow-blocking-route
+               at main (<anonymous>)
+               at body (<anonymous>)
+               at html (<anonymous>)
+           Build-time instant validation failed for route "/shells/with-root-param/[lang]/invalid-root-param-page".
+           To get a more detailed stack trace and pinpoint the issue, try one of the following:
+             - Start the app in development mode by running \`next dev\`, then open "/shells/with-root-param/[lang]/invalid-root-param-page" in your browser to investigate the error.
+             - Rerun the production build with \`next build --debug-prerender\` to generate better stack traces.
+           Stopping prerender due to instant validation errors."
+          `)
+            expect(result.exitCode).toBe(1)
+          }
+        })
+
+        it('invalid - unguarded root param in a cache', async () => {
+          if (isNextDev) {
+            const browser = await navigateTo(
+              '/shells/with-root-param/en/invalid-root-param-cache'
+            )
+            await expect(browser).toDisplayCollapsedRedbox(`
+             {
+               "cause": [
+                 {
+                   "label": "Caused by: Instant Validation",
+                   "source": "app/shells/with-root-param/[lang]/invalid-root-param-cache/page.tsx (3:24) @ instant
+             > 3 | export const instant = { level: 'experimental-error' }
+                 |                        ^",
+                   "stack": [
+                     "instant app/shells/with-root-param/[lang]/invalid-root-param-cache/page.tsx (3:24)",
+                     "Set.forEach <anonymous>",
+                   ],
+                 },
+               ],
+               "code": "E1363",
+               "description": "Next.js encountered link data during a navigation.",
+               "environmentLabel": "Server",
+               "label": "Instant",
+               "source": "app/shells/with-root-param/[lang]/invalid-root-param-cache/page.tsx (18:1) @ LinkDataInCache
+             > 18 | async function LinkDataInCache() {
+                  | ^",
+               "stack": [
+                 "LinkDataInCache app/shells/with-root-param/[lang]/invalid-root-param-cache/page.tsx (18:1)",
+                 "Page app/shells/with-root-param/[lang]/invalid-root-param-cache/page.tsx (13:7)",
+               ],
+             }
+            `)
+          } else {
+            const result = await prerender(
+              '/shells/with-root-param/[lang]/invalid-root-param-cache'
+            )
+            expect(extractBuildValidationError(result.cliOutput))
+              .toMatchInlineSnapshot(`
+           "Error: Route "/shells/with-root-param/[lang]/invalid-root-param-cache": Next.js encountered link data during prerendering or a navigation.
+
+           \`params\`, \`searchParams\` or root params accessed outside of \`<Suspense>\` prevents the navigation from being instant, leading to a slower user experience.
+
+           Ways to fix this:
+             - [stream] Provide a placeholder with \`<Suspense fallback={...}>\` around the data access
+               https://nextjs.org/docs/messages/blocking-prerender-runtime#wrap-in-or-move-into-suspense
+             - [block] Set \`export const instant = false\` to silence this warning and allow a blocking route
+               https://nextjs.org/docs/messages/blocking-prerender-runtime#allow-blocking-route
+               at main (<anonymous>)
+               at body (<anonymous>)
+               at html (<anonymous>)
+           Build-time instant validation failed for route "/shells/with-root-param/[lang]/invalid-root-param-cache".
+           To get a more detailed stack trace and pinpoint the issue, try one of the following:
+             - Start the app in development mode by running \`next dev\`, then open "/shells/with-root-param/[lang]/invalid-root-param-cache" in your browser to investigate the error.
+             - Rerun the production build with \`next build --debug-prerender\` to generate better stack traces.
+           Stopping prerender due to instant validation errors."
+          `)
+            expect(result.exitCode).toBe(1)
+          }
+        })
+      })
+    }
   })
 })
