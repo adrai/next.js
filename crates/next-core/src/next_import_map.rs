@@ -1435,6 +1435,7 @@ async fn insert_instrumentation_client_alias(
         .iter()
         .map(|s| s.as_str())
         .chain(std::iter::once("private-next-instrumentation-client-user"));
+    let module_count = injects.clone().count();
 
     let mut body = String::new();
     for (i, spec) in injects.clone().enumerate() {
@@ -1443,13 +1444,39 @@ async fn insert_instrumentation_client_alias(
             serde_json::to_string(spec)?
         ));
     }
-    body.push_str("module.exports = { onRouterTransitionStart(url, type) {\n");
-    for (i, _) in injects.enumerate() {
+    body.push_str("module.exports = {};\n");
+    for hook_name in [
+        "onRouterTransitionStart",
+        "onRouterTransitionCommit",
+        "onRouterTransitionSettled",
+        "onRouterTransitionMismatch",
+        "onRouterTransitionAbort",
+    ] {
+        body.push_str("if (");
+        for i in 0..module_count {
+            if i > 0 {
+                body.push_str(" || ");
+            }
+            body.push_str(&format!("mod_{i}?.{hook_name}"));
+        }
+        body.push_str(") {\n");
         body.push_str(&format!(
-            "    mod_{i}?.onRouterTransitionStart?.(url, type);\n"
+            "  module.exports.{hook_name} = function (url, type, event) {{\n"
         ));
+        for i in 0..module_count {
+            body.push_str(&format!("    if (mod_{i}?.{hook_name}) {{\n"));
+            body.push_str("      try {\n");
+            body.push_str(&format!("        mod_{i}.{hook_name}(url, type, event);\n"));
+            body.push_str("      } catch (error) {\n");
+            body.push_str(
+                "        console.error('An instrumentation-client router transition hook failed', \
+                 error);\n",
+            );
+            body.push_str("      }\n");
+            body.push_str("    }\n");
+        }
+        body.push_str("  };\n}\n");
     }
-    body.push_str("}};\n");
 
     let virtual_source = VirtualSource::new(
         // Use cjs here in case the user has type:module in the package.json. We do intentionally

@@ -1933,7 +1933,7 @@ export default async function getBaseWebpackConfig(
         // The loader replaces its contents with a synthetic module that
         // requires each `instrumentationClientInject` entry, then re-exports
         // the user's `instrumentation-client.{pageExt}` (composing
-        // `onRouterTransitionStart` hooks across all of them).
+        // router transition hooks across all of them).
         {
           test: /[\\/]next[\\/]dist[\\/](esm[\\/])?build[\\/]webpack[\\/]loaders[\\/]instrumentation-client-stub\.js$/,
           use: {

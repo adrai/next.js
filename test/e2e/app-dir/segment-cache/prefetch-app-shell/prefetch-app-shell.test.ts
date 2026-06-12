@@ -1,6 +1,7 @@
 import { nextTestSetup } from 'e2e-utils'
 import type * as Playwright from 'playwright'
 import { createRouterAct } from 'router-act'
+import { retry } from 'next-test-utils'
 
 describe('App Shell prefetching', () => {
   const { next, isNextDev } = nextTestSetup({
@@ -59,6 +60,62 @@ describe('App Shell prefetching', () => {
     expect(await browser.elementById('dynamic-content').text()).toEqual(
       'Post body for 124'
     )
+  })
+
+  it('reports an App Shell navigation as a shell prefetch hit', async () => {
+    let page: Playwright.Page
+    const browser = await next.browser('/', {
+      beforePageLoad(p: Playwright.Page) {
+        page = p
+      },
+    })
+    const act = createRouterAct(page)
+
+    await act(
+      async () => {
+        await browser
+          .elementByCss('input[data-link-accordion="/posts/1"]')
+          .click()
+      },
+      { includes: 'App shell for posts' }
+    )
+
+    await act(async () => {
+      await browser.elementByCss('a[href="/posts/124"]').click()
+      expect(await browser.elementById('shell').text()).toEqual(
+        'App shell for posts'
+      )
+
+      const events = await browser.eval(`window.__ROUTER_TRANSITION_EVENTS`)
+      expect(events.map((event) => event.phase)).toEqual(['start', 'commit'])
+      expect(events[1]).toMatchObject({
+        phase: 'commit',
+        url: '/posts/124',
+        event: {
+          routes: ['/posts/[id]'],
+          previousRoutes: ['/'],
+          prefetch: 'hit-shell',
+          prefetchIntent: 'none',
+        },
+      })
+      expect(events[1].event.id).toBe(events[0].event.id)
+      expect(events[1].event.timestamp).toBeGreaterThanOrEqual(
+        events[0].event.timestamp
+      )
+    })
+
+    await retry(async () => {
+      const events = await browser.eval(`window.__ROUTER_TRANSITION_EVENTS`)
+      expect(events.map((event) => event.phase)).toEqual([
+        'start',
+        'commit',
+        'settled',
+      ])
+      expect(events[2].event.id).toBe(events[0].event.id)
+      expect(events[2].event.timestamp).toBeGreaterThanOrEqual(
+        events[1].event.timestamp
+      )
+    })
   })
 
   it('skips the per-link Speculative prefetch for a non-eager (force-runtime) route', async () => {

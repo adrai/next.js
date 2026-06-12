@@ -57,6 +57,16 @@ describe('Instrumentation Client Hook', () => {
     return result
   }
 
+  function filterNavigationCommitLogs(logs: Array<{ message: string }>) {
+    const result = []
+    for (const log of logs) {
+      if (log.message.startsWith('[Router Transition Commit]')) {
+        result.push(log.message)
+      }
+    }
+    return result
+  }
+
   describe('onRouterTransitionStart', () => {
     const { next } = nextTestSetup({
       files: path.join(__dirname, 'app-router'),
@@ -97,6 +107,152 @@ describe('Instrumentation Client Hook', () => {
         '[Router Transition Start] [traverse] /',
         '[Router Transition Start] [traverse] /some-page',
       ])
+    })
+
+    it('preserves the legacy two-argument start hook without the experimental flag', async () => {
+      const browser = await next.browser('/')
+
+      await browser.elementByCss('a[href="/some-page"]').click()
+      await browser.elementById('some-page')
+
+      expect(
+        await browser.eval(`
+          window.__ROUTER_TRANSITION_EVENTS.map((event) => ({
+            phase: event.phase,
+            hasEvent: event.event !== undefined,
+          }))
+        `)
+      ).toEqual([{ phase: 'start', hasEvent: false }])
+    })
+  })
+
+  describe('router transition lifecycle', () => {
+    const { next } = nextTestSetup({
+      files: path.join(__dirname, 'app-router'),
+      nextConfig: {
+        experimental: {
+          instrumentationClientRouterTransitionEvents: true,
+        },
+      },
+    })
+
+    async function getTransitionEvents(browser) {
+      return browser.eval(`window.__ROUTER_TRANSITION_EVENTS`)
+    }
+
+    it('reports correlated lifecycle events and route information', async () => {
+      const browser = await next.browser('/')
+
+      await browser.elementByCss('a[href="/some-page"]').click()
+      await browser.elementById('some-page')
+
+      await retry(async () => {
+        expect(
+          (await getTransitionEvents(browser)).map((event) => event.phase)
+        ).toEqual(['start', 'commit', 'settled'])
+      })
+
+      const [start, commit, settled] = await getTransitionEvents(browser)
+      expect(start.url).toBe('/some-page')
+      expect(start.navigateType).toBe('push')
+      expect(commit.event.routes).toEqual(['/some-page'])
+      expect(commit.event.previousRoutes).toEqual(['/'])
+      expect(commit.event.prefetchIntent).toBe('full')
+      if (isNextDev) {
+        expect(commit.event.prefetch).toBe('miss')
+      } else {
+        expect(['hit-route', 'hit-shell', 'miss']).toContain(
+          commit.event.prefetch
+        )
+      }
+      expect(commit.event.id).toBe(start.event.id)
+      expect(settled.event.id).toBe(start.event.id)
+      expect(commit.event.timestamp).toBeGreaterThanOrEqual(
+        start.event.timestamp
+      )
+      expect(settled.event.timestamp).toBeGreaterThanOrEqual(
+        commit.event.timestamp
+      )
+    })
+
+    it('uses route patterns and puts the children route first', async () => {
+      const browser = await next.browser('/')
+
+      await browser.elementByCss('a[href="/blog/hello"]').click()
+      await browser.elementById('blog-post')
+      await retry(async () => {
+        expect((await getTransitionEvents(browser)).at(-2).phase).toBe('commit')
+      })
+      expect((await getTransitionEvents(browser)).at(-2).event.routes).toEqual([
+        '/blog/[slug]',
+      ])
+
+      await browser.elementByCss('a[href="/dashboard"]').click()
+      await browser.elementById('dashboard')
+      await browser.elementById('analytics')
+      await retry(async () => {
+        expect((await getTransitionEvents(browser)).at(-2).phase).toBe('commit')
+      })
+      expect((await getTransitionEvents(browser)).at(-2).event.routes).toEqual([
+        '/dashboard',
+        '/dashboard/@analytics',
+      ])
+    })
+
+    it('commits the shell before the response settles', async () => {
+      const browser = await next.browser('/')
+
+      await browser.elementByCss('a[href="/slow"]').click()
+      await browser.elementById('slow-shell')
+
+      await retry(async () => {
+        expect(
+          (await getTransitionEvents(browser)).some(
+            (event) => event.phase === 'commit'
+          )
+        ).toBe(true)
+      })
+      if (!process.env.IS_WEBPACK_TEST) {
+        expect(
+          (await getTransitionEvents(browser)).some(
+            (event) => event.phase === 'settled'
+          )
+        ).toBe(false)
+      }
+
+      await browser.elementById('slow-content')
+      await retry(async () => {
+        expect(
+          (await getTransitionEvents(browser)).map((event) => event.phase)
+        ).toEqual(['start', 'commit', 'settled'])
+      })
+    })
+
+    it('aborts a transition when it is superseded', async () => {
+      const browser = await next.browser('/')
+
+      await browser.elementByCss('a[href="/slow"]').click()
+      await retry(async () => {
+        expect((await getTransitionEvents(browser))[0].phase).toBe('start')
+      })
+
+      await browser.elementByCss('a[href="/some-page"]').click()
+      await browser.elementById('some-page')
+      await retry(async () => {
+        expect((await getTransitionEvents(browser)).at(-1).phase).toBe(
+          'settled'
+        )
+      })
+
+      const events = await getTransitionEvents(browser)
+      const firstId = events[0].event.id
+      const firstTerminalEvent = events.find(
+        (event) =>
+          event.event.id === firstId &&
+          (event.phase === 'abort' || event.phase === 'settled')
+      )
+      expect(firstTerminalEvent.phase).toBe('abort')
+      expect(firstTerminalEvent.event.reason).toBe('superseded')
     })
   })
 
@@ -156,6 +312,15 @@ describe('Instrumentation Client Hook', () => {
         '[Router Transition Start] [push] / a',
         '[Router Transition Start] [push] / b',
         '[Router Transition Start] [push] / user',
+      ])
+
+      expect(filterNavigationCommitLogs(await browser.log())).toEqual([
+        '[Router Transition Commit] [push] /some-page a',
+        '[Router Transition Commit] [push] /some-page b',
+        '[Router Transition Commit] [push] /some-page user',
+        '[Router Transition Commit] [push] / a',
+        '[Router Transition Commit] [push] / b',
+        '[Router Transition Commit] [push] / user',
       ])
     })
   })

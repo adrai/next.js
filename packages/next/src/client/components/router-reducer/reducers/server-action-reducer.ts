@@ -516,6 +516,7 @@ export function serverActionReducer(
           // have the route tree from the server response. If a mismatch occurs
           // during dynamic data fetch, the retry handler will traverse the
           // known route tree to mark the entry as having a dynamic rewrite.
+          null,
           null
         )
       }
@@ -532,7 +533,8 @@ export function serverActionReducer(
         nextUrl,
         freshnessPolicy,
         scrollBehavior,
-        navigateType
+        navigateType,
+        null
       )
     },
     (e: any) => {

@@ -46,24 +46,36 @@ const NextInstrumentationClientLoader: webpack.LoaderDefinitionFunction<Instrume
           lines.push(`var mod_${i} = require(${JSON.stringify(spec)});`)
         })
 
-        // Compose a single `onRouterTransitionStart` that fans out to every
-        // module's hook (when exported), in array order, with the user file's
-        // hook running last.
-        const hookCalls = allModules
-          .map(
-            // Webpack doesn't transpile this, so use a manual version of optional chaining.
-            (_, i) =>
-              `    mod_${i} && mod_${i}.onRouterTransitionStart && mod_${i}.onRouterTransitionStart(url, type);`
-          )
-          .join('\n')
+        const hookNames = [
+          'onRouterTransitionStart',
+          'onRouterTransitionCommit',
+          'onRouterTransitionSettled',
+          'onRouterTransitionMismatch',
+          'onRouterTransitionAbort',
+        ]
 
-        lines.push(
-          `module.exports = {`,
-          `  onRouterTransitionStart: function (url, type) {`,
-          hookCalls,
-          `  },`,
-          `};`
-        )
+        lines.push(`module.exports = {};`)
+        for (const hookName of hookNames) {
+          const hookChecks = allModules
+            .map((_, i) => `(mod_${i} && mod_${i}.${hookName})`)
+            .join(' || ')
+          lines.push(
+            `if (${hookChecks}) {`,
+            `  module.exports.${hookName} = function (url, type, event) {`
+          )
+          allModules.forEach((_, i) => {
+            lines.push(
+              `    if (mod_${i} && mod_${i}.${hookName}) {`,
+              `      try {`,
+              `        mod_${i}.${hookName}(url, type, event);`,
+              `      } catch (error) {`,
+              `        console.error('An instrumentation-client router transition hook failed', error);`,
+              `      }`,
+              `    }`
+            )
+          })
+          lines.push(`  };`, `}`)
+        }
 
         callback(null, lines.join('\n') + '\n')
       })

@@ -6,6 +6,7 @@ import {
   ACTION_SERVER_ACTION,
   ACTION_NAVIGATE,
   ACTION_RESTORE,
+  ACTION_SERVER_PATCH,
   type NavigateAction,
   ACTION_HMR_REFRESH,
   PrefetchKind,
@@ -35,9 +36,17 @@ import type {
   PrefetchOptions,
 } from '../../shared/lib/app-router-context.shared-runtime'
 import { setLinkForCurrentNavigation, type LinkInstance } from './links'
-import type { ClientInstrumentationHooks } from '../app-index'
+import type {
+  ClientInstrumentationHooks,
+  RouterTransitionPrefetchIntent,
+} from '../router-transition-types'
 import type { GlobalErrorComponent } from './builtin/global-error'
 import { isJavaScriptURLString } from '../lib/javascript-url'
+import {
+  abortRouterTransition,
+  initializeRouterTransitionHooks,
+  startRouterTransition,
+} from './router-transition'
 
 export type DispatchStatePromise = React.Dispatch<ReducerState>
 
@@ -45,10 +54,6 @@ export type AppRouterActionQueue = {
   state: AppRouterState
   dispatch: (payload: ReducerActions, setState: DispatchStatePromise) => void
   action: (state: AppRouterState, action: ReducerActions) => ReducerState
-
-  onRouterTransitionStart:
-    | ((url: string, type: 'push' | 'replace' | 'traverse') => void)
-    | null
 
   pending: ActionQueueNode | null
   needsRefresh?: boolean
@@ -66,6 +71,14 @@ export type ActionQueueNode = {
   resolve: (value: ReducerState) => void
   reject: (err: Error) => void
   discarded?: boolean
+}
+
+function getActionTransitionId(action: ReducerActions): string | null {
+  return action.type === ACTION_NAVIGATE ||
+    action.type === ACTION_RESTORE ||
+    action.type === ACTION_SERVER_PATCH
+    ? action.transitionId
+    : null
 }
 
 function runRemainingActions(
@@ -136,6 +149,7 @@ async function runAction({
   if (isThenable(actionResult)) {
     actionResult.then(handleResult, (err) => {
       runRemainingActions(actionQueue, setState)
+      abortRouterTransition(getActionTransitionId(action.payload), 'error')
       action.reject(err)
     })
   } else {
@@ -231,13 +245,8 @@ export function createMutableActionQueue(
     },
     pending: null,
     last: null,
-    onRouterTransitionStart:
-      instrumentationHooks !== null &&
-      typeof instrumentationHooks.onRouterTransitionStart === 'function'
-        ? // This profiling hook will be called at the start of every navigation.
-          instrumentationHooks.onRouterTransitionStart
-        : null,
   }
+  initializeRouterTransitionHooks(instrumentationHooks)
 
   if (typeof window !== 'undefined') {
     // The action queue is lazily created on hydration, but after that point
@@ -268,19 +277,13 @@ function getAppRouterActionQueue(): AppRouterActionQueue {
   return globalActionQueue
 }
 
-function getProfilingHookForOnNavigationStart() {
-  if (globalActionQueue !== null) {
-    return globalActionQueue.onRouterTransitionStart
-  }
-  return null
-}
-
 export function dispatchNavigateAction(
   href: string,
   navigateType: NavigateAction['navigateType'],
   scrollBehavior: ScrollBehavior,
   linkInstanceRef: LinkInstance | null,
-  transitionTypes: string[] | undefined
+  transitionTypes: string[] | undefined,
+  prefetchIntent: RouterTransitionPrefetchIntent
 ): void {
   // TODO: This stuff could just go into the reducer. Leaving as-is for now
   // since we're about to rewrite all the router reducer stuff anyway.
@@ -297,11 +300,12 @@ export function dispatchNavigateAction(
   }
 
   setLinkForCurrentNavigation(linkInstanceRef)
-
-  const onRouterTransitionStart = getProfilingHookForOnNavigationStart()
-  if (onRouterTransitionStart !== null) {
-    onRouterTransitionStart(href, navigateType)
-  }
+  const transitionId = startRouterTransition(
+    href,
+    navigateType,
+    getAppRouterActionQueue().state.tree,
+    prefetchIntent
+  )
 
   dispatchAppRouterAction({
     type: ACTION_NAVIGATE,
@@ -310,6 +314,7 @@ export function dispatchNavigateAction(
     locationSearch: location.search,
     scrollBehavior,
     navigateType,
+    transitionId,
   })
 }
 
@@ -317,14 +322,17 @@ export function dispatchTraverseAction(
   href: string,
   historyState: AppHistoryState | undefined
 ) {
-  const onRouterTransitionStart = getProfilingHookForOnNavigationStart()
-  if (onRouterTransitionStart !== null) {
-    onRouterTransitionStart(href, 'traverse')
-  }
+  const transitionId = startRouterTransition(
+    href,
+    'traverse',
+    getAppRouterActionQueue().state.tree,
+    'none'
+  )
   dispatchAppRouterAction({
     type: ACTION_RESTORE,
     url: new URL(href),
     historyState,
+    transitionId,
   })
 }
 
@@ -378,7 +386,8 @@ function gesturePush(href: string, options?: NavigateOptions): void {
       state.nextUrl,
       freshnessPolicy,
       scrollBehavior,
-      'push'
+      'push',
+      null
     )
     dispatchGestureState(forkedGestureState)
   }
@@ -450,7 +459,8 @@ export const publicAppRouterInstance: AppRouterInstance = {
           ? ScrollBehavior.NoScroll
           : ScrollBehavior.Default,
         null,
-        options?.transitionTypes
+        options?.transitionTypes,
+        'none'
       )
     })
   },
@@ -468,7 +478,8 @@ export const publicAppRouterInstance: AppRouterInstance = {
           ? ScrollBehavior.NoScroll
           : ScrollBehavior.Default,
         null,
-        options?.transitionTypes
+        options?.transitionTypes,
+        'none'
       )
     })
   },

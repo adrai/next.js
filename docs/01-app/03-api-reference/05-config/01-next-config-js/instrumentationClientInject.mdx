@@ -48,7 +48,9 @@ Modules run on the client in this order:
 
 ## Router navigation hook
 
-Each injected module may optionally export an `onRouterTransitionStart` function with the same signature as the one documented for the [`instrumentation-client` file convention](/docs/app/api-reference/file-conventions/instrumentation-client#router-navigation-tracking). Next.js composes a single hook that fans out to every exported `onRouterTransitionStart` on each navigation, calling them in array order, with the user file's hook running last.
+Each injected module may optionally export any of the router transition hooks documented for the [`instrumentation-client` file convention](/docs/app/api-reference/file-conventions/instrumentation-client#router-navigation-tracking). Next.js composes each hook across the injected modules in array order, with the user file's hook running last.
+
+The `onRouterTransitionStart(url, navigationType)` hook is available by default. The third event argument and the remaining lifecycle hooks require `experimental.instrumentationClientRouterTransitionEvents` to be enabled.
 
 ```js filename="lib/sentry-client.js"
 // Side-effectful setup runs at load time.
@@ -57,9 +59,13 @@ setupSentry()
 export function onRouterTransitionStart(url, navigationType) {
   recordNavigationBreadcrumb(url, navigationType)
 }
+
+export function onRouterTransitionCommit(url, navigationType, event) {
+  recordNavigationCommit(url, navigationType, event)
+}
 ```
 
-Modules that do not export `onRouterTransitionStart` are skipped during navigation.
+Modules that do not export a particular hook are skipped when that hook fires. Errors thrown by one module do not prevent later modules from running.
 
 ## Version history
 

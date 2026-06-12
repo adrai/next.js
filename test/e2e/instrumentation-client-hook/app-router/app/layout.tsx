@@ -9,7 +9,18 @@ export default function RootLayout({ children }) {
             <Link href="/">Home</Link>
           </li>
           <li>
-            <Link href="/some-page">Some Page</Link>
+            <Link href="/some-page" prefetch={true}>
+              Some Page
+            </Link>
+          </li>
+          <li>
+            <Link href="/dashboard">Dashboard</Link>
+          </li>
+          <li>
+            <Link href="/blog/hello">Blog post</Link>
+          </li>
+          <li>
+            <Link href="/slow">Slow page</Link>
           </li>
         </ul>
         {children}

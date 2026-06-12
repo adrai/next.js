@@ -27,6 +27,7 @@ import type { StaticIndicatorState } from './dev/hot-reloader/app/hot-reloader-a
 import { createInitialRSCPayloadFromFallbackPrerender } from './flight-data-helpers'
 import { getDeploymentId } from '../shared/lib/deployment-id'
 import { setNavigationBuildId } from './navigation-build-id'
+import type { ClientInstrumentationHooks } from './router-transition-types'
 
 /// <reference types="react-dom/experimental" />
 
@@ -339,12 +340,7 @@ const reactRootOptions: ReactDOMClient.RootOptions = {
   onUncaughtError,
 }
 
-export type ClientInstrumentationHooks = {
-  onRouterTransitionStart?: (
-    url: string,
-    navigationType: 'push' | 'replace' | 'traverse'
-  ) => void
-}
+export type { ClientInstrumentationHooks } from './router-transition-types'
 
 export async function hydrate(
   instrumentationHooks: ClientInstrumentationHooks | null,
